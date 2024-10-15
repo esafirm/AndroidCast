@@ -92,7 +92,8 @@ fun MainScreen(castViewModel: CastViewModel) {
 
         Text(
             text = "Device state: $deviceState",
-            style = MaterialTheme.typography.bodySmall
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 16.dp),
         )
 
         when (deviceState) {

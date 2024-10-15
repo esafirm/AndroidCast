@@ -14,6 +14,8 @@ import androidx.mediarouter.media.MediaRouter
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaQueueData
+import com.google.android.gms.cast.MediaQueueItem
 import com.google.android.gms.cast.MediaSeekOptions
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastState
@@ -61,7 +63,7 @@ data class ChromeCastDevice(val route: MediaRouter.RouteInfo) :
 class CastViewModel(
     private val search: Search,
     private val castContext: CastContext,
-    private var mediaRouter: MediaRouter
+    private var mediaRouter: MediaRouter,
 ) : ViewModel() {
 
     private var urlToPlay by mutableStateOf("")
@@ -145,8 +147,7 @@ class CastViewModel(
 
     fun stopSearch() {
         search.stop()
-
-        mediaRouter.removeCallback(mediaRouterCallBack())
+        mediaRouter.removeCallback(viewModelCallback)
     }
 
     fun connect(url: String, device: Device) {
@@ -244,10 +245,6 @@ class CastViewModel(
         duration.intValue = 0
         currentTime.intValue = 0
         progress.floatValue = 0f
-    }
-
-    fun disconnect() {
-        videoPlayer?.disconnect()
     }
 
     private fun videoPlayerListener() = object : VideoPlayer.OnVideoPlayerListener {
@@ -381,30 +378,48 @@ class CastViewModel(
                 val castSession = castContext.sessionManager.currentCastSession
 
                 remoteMediaClient = castSession?.remoteMediaClient
-                remoteMediaClient?.stop()
 
-                remoteMediaClient?.registerCallback(mediaClientCallback())
+                val client = requireNotNull(remoteMediaClient)
 
-                val videoMetadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MOVIE).apply {
+                client.stop()
+                client.registerCallback(viewModelClientCallback)
+
+                val mediaMetadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
                     putString(MediaMetadata.KEY_TITLE, urlToPlay)
                 }
 
                 val mediaInfo = MediaInfo.Builder(urlToPlay)
                     .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
-                    .setMetadata(videoMetadata)
+                    .setMetadata(mediaMetadata)
+                    .build()
 
+                val queueItem = MediaQueueItem.Builder(mediaInfo)
+                    .build()
 
                 val mediaLoadRequestData = MediaLoadRequestData.Builder()
-                    .setMediaInfo(mediaInfo.build())
+                    .setQueueData(
+                        MediaQueueData.Builder()
+                            .setItems(listOf(queueItem))
+                            .build()
+                    )
                     .setAutoplay(true)
 
-                remoteMediaClient?.load(mediaLoadRequestData.build())
+                client.load(mediaLoadRequestData.build())
+                    .setResultCallback { result ->
+                        if (result.status.isSuccess) {
+                            val currentItemId = client.currentItem?.itemId
+                            val currentPosition = client.approximateStreamPosition
+
+                            log("=> Media loaded: $currentItemId - $currentPosition")
+                        }
+                    }
 
                 stopSearch()
             }
 
             CastState.NOT_CONNECTED -> {
-                remoteMediaClient?.unregisterCallback(mediaClientCallback())
+                remoteMediaClient?.stop()
+                remoteMediaClient?.unregisterCallback(viewModelClientCallback)
                 remoteMediaClient = null
                 startSearch()
             }
@@ -433,6 +448,7 @@ class CastViewModel(
                 log("=> Route changed: ${route.name}")
             } else {
                 log("=> Route changed but it is not in the device list: ${route.name}")
+                deviceList.add(ChromeCastDevice(route = route))
             }
         }
 
@@ -457,31 +473,26 @@ class CastViewModel(
     }
 
     private fun mediaClientCallback() = object : RemoteMediaClient.Callback() {
+
         override fun onStatusUpdated() {
-            if (remoteMediaClient == null) return
+            val client = remoteMediaClient ?: return
 
-            remoteMediaClient?.let {
-                isPlaying = it.isPlaying
+            isPlaying = client.isPlaying
+            playerState = if (client.isBuffering) PlayerState.BUFFERING else PlayerState.READY
 
-                playerState = if (it.isBuffering) PlayerState.BUFFERING else PlayerState.READY
+            client.addProgressListener({ position, duration ->
 
-                it.streamDuration
-                it.addProgressListener({ position, duration ->
+                if (duration <= 0) return@addProgressListener
 
-                    if (duration <= 0) return@addProgressListener
+                this@CastViewModel.duration.intValue = duration.toInt()
+                this@CastViewModel.currentTime.intValue = position.toInt()
 
-                    this@CastViewModel.duration.intValue = duration.toInt()
-                    this@CastViewModel.currentTime.intValue = position.toInt()
-
-                    if (position > 0) {
-                        val current = position.toFloat()
-                        val dur = duration.toFloat()
-                        progress.floatValue = (current / dur)
-                    }
-                }, 500)
-
-                Unit
-            }
+                if (position > 0) {
+                    val current = position.toFloat()
+                    val dur = duration.toFloat()
+                    progress.floatValue = (current / dur)
+                }
+            }, 500)
         }
     }
 }

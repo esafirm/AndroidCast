@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
 import androidx.mediarouter.media.MediaRouter
 import com.samsung.multiscreen.Service
 import com.androidcast.ui.theme.AndroidCastTheme
@@ -21,6 +22,11 @@ class MainActivity : ComponentActivity() {
         val castContext = CastContext.getSharedInstance(this)
         val mediaRouter = MediaRouter.getInstance(this)
 
+        VolumeRouter(
+            context = this,
+            lifecycle = lifecycle,
+            mediaRouter = mediaRouter,
+        )
         castViewModel = CastViewModel(service, castContext, mediaRouter)
 
         setContent {
