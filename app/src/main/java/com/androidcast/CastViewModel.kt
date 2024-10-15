@@ -18,7 +18,6 @@ import com.google.android.gms.cast.MediaSeekOptions
 import com.google.android.gms.cast.framework.CastContext
 import com.google.android.gms.cast.framework.CastState
 import com.google.android.gms.cast.framework.CastStateListener
-import com.google.android.gms.cast.framework.SessionManager
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
 import com.samsung.multiscreen.Error
 import com.samsung.multiscreen.Player
@@ -30,10 +29,10 @@ import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 enum class CastDeviceState {
+    INITIAL,
     SEARCHING,
     CONNECTING,
     CONNECTED
-
 }
 
 enum class PlayerState {
@@ -47,9 +46,10 @@ data class SamsungDevice(val service: Service) :
     Device(
         service.id,
         service.name,
-        service.type+ " - " + service.version,
+        service.type + " - " + service.version,
         !service.isStandbyService
     )
+
 data class ChromeCastDevice(val route: MediaRouter.RouteInfo) :
     Device(
         route.id,
@@ -58,11 +58,15 @@ data class ChromeCastDevice(val route: MediaRouter.RouteInfo) :
         route.isEnabled
     )
 
-class CastViewModel(private val search: Search, private val castContext: CastContext, private var mediaRouter: MediaRouter) : ViewModel() {
+class CastViewModel(
+    private val search: Search,
+    private val castContext: CastContext,
+    private var mediaRouter: MediaRouter
+) : ViewModel() {
 
     private var urlToPlay by mutableStateOf("")
 
-    var deviceState by mutableStateOf(CastDeviceState.SEARCHING)
+    var deviceState by mutableStateOf(CastDeviceState.INITIAL)
     val deviceList = mutableStateListOf<Device>()
     var currentDevice by mutableStateOf<Device?>(null)
 
@@ -77,14 +81,14 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
     private var videoPlayer by mutableStateOf<VideoPlayer?>(null)
     private var remoteMediaClient by mutableStateOf<RemoteMediaClient?>(null)
 
-    init {
+    private val viewModelCallback: MediaRouter.Callback = mediaRouterCallBack()
+    private val viewModelClientCallback: RemoteMediaClient.Callback = mediaClientCallback()
 
+    init {
         search.setOnServiceFoundListener(serviceFound())
         search.setOnServiceLostListener(serviceLost())
 
         castContext.addCastStateListener(castStateListener())
-
-        //search.start()
 
         startSearch()
     }
@@ -103,23 +107,43 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
         deviceList.remove(deviceById)
     }
 
-    fun startSearch(){
+    fun startSearch() {
+        if (deviceState == CastDeviceState.SEARCHING) {
+            log("Requested to start search but already searching…")
+            return
+        }
+        log("Starting search…")
+
         search.start()
 
         val selector = MediaRouteSelector.Builder()
             // These are the framework-supported intents
-            //.addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
-            //.addControlCategory(MediaControlIntent.CATEGORY_LIVE_VIDEO)
+            // .addControlCategory(MediaControlIntent.CATEGORY_LIVE_AUDIO)
+            // .addControlCategory(MediaControlIntent.CATEGORY_LIVE_VIDEO)
             .addControlCategory(MediaControlIntent.CATEGORY_REMOTE_PLAYBACK)
             .build()
 
-        mediaRouter.addCallback(selector, mediaRouterCallBack(), MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN)
+        // Load initial routes
+        log("Adding initial routes…")
+        for (route in mediaRouter.routes) {
+            log("  -> Checking route: ${route.name}")
+            if (route.matchesSelector(selector)) {
+                log("  -> Adding route: ${route.name}")
+                deviceList.add(ChromeCastDevice(route))
+            }
+        }
 
+        // Scan to search for new routes
+        mediaRouter.addCallback(
+            selector,
+            viewModelCallback,
+            MediaRouter.CALLBACK_FLAG_PERFORM_ACTIVE_SCAN
+        )
 
         deviceState = CastDeviceState.SEARCHING
     }
 
-    fun stopSearch(){
+    fun stopSearch() {
         search.stop()
 
         mediaRouter.removeCallback(mediaRouterCallBack())
@@ -132,28 +156,31 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
         deviceState = CastDeviceState.CONNECTING
         stopSearch()
 
-        when(device) {
+        when (device) {
             is SamsungDevice -> {
                 videoPlayer = device.service.createVideoPlayer("AndroidCast")
                 videoPlayer?.addOnMessageListener(videoPlayerListener())
-                videoPlayer?.playContent(Uri.parse(urlToPlay), "AndroidCast", Uri.parse(""), object : com.samsung.multiscreen.Result<Boolean> {
-                    override fun onSuccess(p0: Boolean?) {
-                        //result(true, null)
-                        deviceState = CastDeviceState.CONNECTED
-                    }
+                videoPlayer?.playContent(
+                    Uri.parse(urlToPlay),
+                    "AndroidCast",
+                    Uri.parse(""),
+                    object : com.samsung.multiscreen.Result<Boolean> {
+                        override fun onSuccess(p0: Boolean?) {
+                            //result(true, null)
+                            deviceState = CastDeviceState.CONNECTED
+                        }
 
-                    override fun onError(p0: Error?) {
-                        startSearch()
-                    }
+                        override fun onError(p0: Error?) {
+                            startSearch()
+                        }
 
-                })
+                    })
             }
+
             is ChromeCastDevice -> {
                 mediaRouter.selectRoute(device.route)
             }
         }
-
-
     }
 
     fun play() {
@@ -161,12 +188,12 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
         remoteMediaClient?.play()
     }
 
-    fun pause(){
+    fun pause() {
         videoPlayer?.pause()
         remoteMediaClient?.pause()
     }
 
-    fun rewind(){
+    fun rewind() {
         videoPlayer?.rewind()
 
         remoteMediaClient?.let {
@@ -176,7 +203,7 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
         }
     }
 
-    fun forward(){
+    fun forward() {
         videoPlayer?.forward()
 
         remoteMediaClient?.let {
@@ -186,7 +213,7 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
         }
     }
 
-    fun seek(time: Int){
+    fun seek(time: Int) {
         videoPlayer?.seekTo(time, TimeUnit.MILLISECONDS)
 
         remoteMediaClient?.let {
@@ -195,7 +222,7 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
         }
     }
 
-    fun stop(){
+    fun stop() {
         videoPlayer?.stop()
         videoPlayer?.disconnect()
 
@@ -209,7 +236,7 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
 
     private fun resetAll() {
         videoPlayer = null
-        remoteMediaClient= null
+        remoteMediaClient = null
 
         playerState = PlayerState.IDLE
         isPlaying = false
@@ -219,7 +246,7 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
         progress.floatValue = 0f
     }
 
-    fun disconnect(){
+    fun disconnect() {
         videoPlayer?.disconnect()
     }
 
@@ -234,11 +261,6 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
         override fun onBufferingComplete() {
             println("onBufferingComplete")
             playerState = PlayerState.READY
-            /*if (playWhenReady.value) {
-                play()
-            } else {
-                pause()
-            }*/
         }
 
         override fun onBufferingProgress(progress: Int) {
@@ -345,7 +367,6 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
 
         override fun onError(p0: Error?) {
         }
-
     }
 
     /**
@@ -353,7 +374,7 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
      */
 
     private fun castStateListener() = CastStateListener {
-        when(it) {
+        when (it) {
             CastState.CONNECTED -> {
                 deviceState = CastDeviceState.CONNECTED
 
@@ -381,6 +402,7 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
 
                 stopSearch()
             }
+
             CastState.NOT_CONNECTED -> {
                 remoteMediaClient?.unregisterCallback(mediaClientCallback())
                 remoteMediaClient = null
@@ -388,30 +410,40 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
             }
         }
     }
-    private fun mediaRouterCallBack() =  object: MediaRouter.Callback() {
+
+    private fun mediaRouterCallBack() = object : MediaRouter.Callback() {
         override fun onRouteAdded(router: MediaRouter, route: MediaRouter.RouteInfo) {
+            log("=> Route added: ${route.name}")
+
             if (!deviceList.any { it.id == route.id } && route.isEnabled)
                 deviceList.add(ChromeCastDevice(route = route))
         }
 
         override fun onRouteRemoved(router: MediaRouter, route: MediaRouter.RouteInfo) {
+            log("=> Route removed: ${route.name}")
+
             val deviceById = deviceList.find { it.id == route.id }
             deviceList.remove(deviceById)
         }
 
-        /*override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
+        override fun onRouteChanged(router: MediaRouter, route: MediaRouter.RouteInfo) {
             val old = deviceList.find { it.id == route.id }
-            deviceList[deviceList.indexOf(old)] = ChromeCastDevice(route = route)
-        }*/
+            if (old != null) {
+                deviceList[deviceList.indexOf(old)] = ChromeCastDevice(route = route)
+                log("=> Route changed: ${route.name}")
+            } else {
+                log("=> Route changed but it is not in the device list: ${route.name}")
+            }
+        }
 
-        /*override fun onRouteSelected(
+        override fun onRouteSelected(
             router: MediaRouter,
             selectedRoute: MediaRouter.RouteInfo,
             reason: Int,
             requestedRoute: MediaRouter.RouteInfo
         ) {
             mediaRouter = router
-
+            log("=> Route selected: ${selectedRoute.name} - Reason: $reason")
         }
 
         override fun onRouteUnselected(
@@ -420,10 +452,11 @@ class CastViewModel(private val search: Search, private val castContext: CastCon
             reason: Int
         ) {
             super.onRouteUnselected(router, route, reason)
-        }*/
+            log("=> Route unselected: ${route.name} - Reason: $reason")
+        }
     }
 
-    private fun mediaClientCallback() = object: RemoteMediaClient.Callback() {
+    private fun mediaClientCallback() = object : RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
             if (remoteMediaClient == null) return
 
