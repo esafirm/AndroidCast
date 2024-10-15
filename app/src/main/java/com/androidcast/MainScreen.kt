@@ -96,6 +96,15 @@ fun MainScreen(castViewModel: CastViewModel) {
             modifier = Modifier.padding(top = 16.dp),
         )
 
+        val playingMedia = castViewModel.playingMedia
+        if (playingMedia != null) {
+            Text(
+                text = "Playing: $playingMedia",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(top = 16.dp),
+            )
+        }
+
         when (deviceState) {
             // Don't render anything if the device state is initial
             CastDeviceState.INITIAL -> Unit

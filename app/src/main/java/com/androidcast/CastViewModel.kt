@@ -76,6 +76,8 @@ class CastViewModel(
 
     var isPlaying by mutableStateOf(true)
 
+    var playingMedia by mutableStateOf<String?>(null)
+
     val duration = mutableIntStateOf(0)
     val currentTime = mutableIntStateOf(0)
     val progress = mutableFloatStateOf(0f)
@@ -384,22 +386,25 @@ class CastViewModel(
                 client.stop()
                 client.registerCallback(viewModelClientCallback)
 
-                val mediaMetadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
-                    putString(MediaMetadata.KEY_TITLE, urlToPlay)
-                }
-
-                val mediaInfo = MediaInfo.Builder(urlToPlay)
-                    .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
-                    .setMetadata(mediaMetadata)
-                    .build()
-
-                val queueItem = MediaQueueItem.Builder(mediaInfo)
-                    .build()
+                val queue = listOf(
+                    createQueueItem(
+                        title = "Track 1",
+                        urlToPlay = "https://static-test.bandlab.com/revisions-formatted/0ac20bba-bd82-46bd-aa8f-149d8a6aecd1/0ac20bba-bd82-46bd-aa8f-149d8a6aecd1.m4a"
+                    ),
+                    createQueueItem(
+                        title = "Track 2",
+                        urlToPlay = "https://static-test.bandlab.com/revisions-formatted/3f8c76b4-d8d2-4530-a5eb-b8ded473d8b6/3f8c76b4-d8d2-4530-a5eb-b8ded473d8b6.m4a"
+                    ),
+                    createQueueItem(
+                        title = "Track 3",
+                        urlToPlay = "https://static-test.bandlab.com/revisions-formatted/6a178df3-06e7-4635-8777-e91a561553cc/6a178df3-06e7-4635-8777-e91a561553cc.m4a"
+                    ),
+                )
 
                 val mediaLoadRequestData = MediaLoadRequestData.Builder()
                     .setQueueData(
                         MediaQueueData.Builder()
-                            .setItems(listOf(queueItem))
+                            .setItems(queue)
                             .build()
                     )
                     .setAutoplay(true)
@@ -407,10 +412,7 @@ class CastViewModel(
                 client.load(mediaLoadRequestData.build())
                     .setResultCallback { result ->
                         if (result.status.isSuccess) {
-                            val currentItemId = client.currentItem?.itemId
-                            val currentPosition = client.approximateStreamPosition
-
-                            log("=> Media loaded: $currentItemId - $currentPosition")
+                            log("Media loaded!")
                         }
                     }
 
@@ -424,6 +426,23 @@ class CastViewModel(
                 startSearch()
             }
         }
+    }
+
+    private fun createQueueItem(
+        title: String,
+        urlToPlay: String,
+    ): MediaQueueItem {
+        val mediaMetadata = MediaMetadata(MediaMetadata.MEDIA_TYPE_MUSIC_TRACK).apply {
+            putString(MediaMetadata.KEY_TITLE, title)
+        }
+
+        val mediaInfo = MediaInfo.Builder(urlToPlay)
+            .setStreamType(MediaInfo.STREAM_TYPE_BUFFERED)
+            .setMetadata(mediaMetadata)
+            .build()
+
+        return MediaQueueItem.Builder(mediaInfo)
+            .build()
     }
 
     private fun mediaRouterCallBack() = object : MediaRouter.Callback() {
@@ -493,6 +512,18 @@ class CastViewModel(
                     progress.floatValue = (current / dur)
                 }
             }, 500)
+        }
+
+        override fun onQueueStatusUpdated() {
+            val client = remoteMediaClient ?: return
+
+            if (client.currentItem == null) {
+                playingMedia = null
+                return
+            }
+            val title = client.currentItem?.media?.metadata?.getString(MediaMetadata.KEY_TITLE)
+                ?: "Unknown Title"
+            playingMedia = title
         }
     }
 }
